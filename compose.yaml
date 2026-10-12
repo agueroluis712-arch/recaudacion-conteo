@@ -1,0 +1,47 @@
+services:
+  db:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_DB: ${DB_NAME:-recaudacion}
+      POSTGRES_USER: ${DB_USER:-recaudacion}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-recaudacion-local}
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-recaudacion} -d ${DB_NAME:-recaudacion}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+  backend:
+    build: ./backend
+    env_file:
+      - .env
+    environment:
+      DB_HOST: db
+    command: python manage.py runserver 0.0.0.0:8000
+    volumes:
+      - ./backend:/app
+      - ./templates:/templates:ro
+      - uploaded_files:/app/media
+    ports:
+      - "8000:8000"
+    depends_on:
+      db:
+        condition: service_healthy
+
+  frontend:
+    build: ./frontend
+    command: pnpm dev --host 0.0.0.0
+    volumes:
+      - ./frontend:/app
+      - frontend_node_modules:/app/node_modules
+    ports:
+      - "5173:5173"
+    depends_on:
+      - backend
+
+volumes:
+  postgres_data:
+  uploaded_files:
+  frontend_node_modules:
