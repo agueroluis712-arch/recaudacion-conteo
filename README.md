@@ -32,6 +32,12 @@ Roles incluidos:
 
 Los permisos se controlan en la API. Ocultar un botón en el frontend no concede ni revoca acceso.
 
+### Recuperación de contraseña
+
+Cada usuario debe tener un correo único. Desde el ingreso puede solicitar un enlace de recuperación de un solo uso, válido durante una hora. En desarrollo, Django imprime el mensaje y el enlace en la consola del backend.
+
+Para enviar correos reales, configurar en `.env` `APP_PUBLIC_URL`, `EMAIL_BACKEND`, `DEFAULT_FROM_EMAIL`, `EMAIL_HOST`, `EMAIL_PORT`, `EMAIL_HOST_USER`, `EMAIL_HOST_PASSWORD` y `EMAIL_USE_TLS` con las credenciales SMTP del proveedor elegido. Las credenciales nunca deben incorporarse al repositorio.
+
 El diseño completo está en [docs/diseno-funcional-tecnico.md](docs/diseno-funcional-tecnico.md).
 
 ## Inicio local con contenedores
@@ -56,7 +62,19 @@ Set-Location frontend
 pnpm dev --host 127.0.0.1
 ```
 
-Esta versión es apta para evaluación local. Antes de una puesta en producción institucional aún se deben activar autenticación por roles, HTTPS, PostgreSQL administrado, backups y configuración de red.
+Esta versión es apta para evaluación local. La configuración productiva está documentada en [docs/despliegue-produccion.md](docs/despliegue-produccion.md) e incluye React compilado con Nginx, Django con Gunicorn y PostgreSQL.
+
+## Ejecución productiva con contenedores
+
+1. Copiar `.env.production.example` como `.env.production` y reemplazar los valores de ejemplo.
+2. Configurar el dominio, HTTPS, PostgreSQL persistente y SMTP según la [guía de despliegue](docs/despliegue-produccion.md).
+3. Ejecutar:
+
+```powershell
+docker compose --env-file .env.production -f compose.prod.yaml up -d --build
+```
+
+La configuración local de `compose.yaml` continúa separada y no fue modificada.
 
 ## Verificación sin Docker
 

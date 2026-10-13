@@ -1,9 +1,13 @@
 from django.contrib.auth import authenticate, get_user_model, login, logout
 from django.contrib.auth.models import Group
+from django.contrib.auth.tokens import default_token_generator
 from django.contrib.auth.password_validation import validate_password
 from django.conf import settings
+from django.core.mail import send_mail
 from django.core.exceptions import ValidationError
 from django.db import transaction
+from django.utils.encoding import force_bytes, force_str
+from django.utils.http import urlsafe_base64_decode, urlsafe_base64_encode
 from django.views.decorators.csrf import csrf_protect, ensure_csrf_cookie
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import AllowAny, IsAuthenticated
@@ -52,6 +56,55 @@ def sign_in(request):
     return Response(serialize_user(user))
 
 
+@csrf_protect
+@api_view(["POST"])
+@permission_classes([AllowAny])
+def request_password_reset(request):
+    email = str(request.data.get("email", "")).strip().lower()
+    user = get_user_model().objects.filter(email__iexact=email, is_active=True).first() if email else None
+    if user and user.has_usable_password():
+        uid = urlsafe_base64_encode(force_bytes(user.pk))
+        token = default_token_generator.make_token(user)
+        base_url = settings.APP_PUBLIC_URL or request.build_absolute_uri("/").rstrip("/")
+        reset_url = f"{base_url}/#restablecer?uid={uid}&token={token}"
+        send_mail(
+            "Restablecer contraseña de Recaudación",
+            (
+                f"Hola {user.get_full_name().strip() or user.username},\n\n"
+                "Recibimos una solicitud para cambiar tu contraseña. "
+                "Abrí este enlace para elegir una nueva:\n\n"
+                f"{reset_url}\n\n"
+                "Si no solicitaste el cambio, ignorá este mensaje."
+            ),
+            settings.DEFAULT_FROM_EMAIL,
+            [user.email],
+        )
+    return Response({"detail": "Si el correo está registrado, recibirás un enlace para restablecer la contraseña."})
+
+
+@csrf_protect
+@api_view(["POST"])
+@permission_classes([AllowAny])
+def confirm_password_reset(request):
+    uid = str(request.data.get("uid", ""))
+    token = str(request.data.get("token", ""))
+    password = str(request.data.get("password", ""))
+    try:
+        user_id = force_str(urlsafe_base64_decode(uid))
+        user = get_user_model().objects.filter(pk=user_id, is_active=True).first()
+    except (TypeError, ValueError, OverflowError, UnicodeDecodeError):
+        user = None
+    if not user or not default_token_generator.check_token(user, token):
+        return Response({"error": "El enlace no es válido o ya venció"}, status=400)
+    try:
+        validate_password(password, user=user)
+    except ValidationError as exc:
+        return Response({"error": " ".join(exc.messages)}, status=400)
+    user.set_password(password)
+    user.save(update_fields=("password",))
+    return Response({"detail": "La contraseña fue actualizada correctamente."})
+
+
 @api_view(["GET"])
 @permission_classes([AllowAny])
 def bootstrap_status(request):
@@ -68,8 +121,9 @@ def bootstrap_administrator(request):
         return Response({"error": "La inicialización ya no está disponible"}, status=403)
     username = str(request.data.get("username", "")).strip()
     password = str(request.data.get("password", ""))
-    if not username or not password:
-        return Response({"error": "Usuario y contraseña son obligatorios"}, status=400)
+    email = str(request.data.get("email", "")).strip().lower()
+    if not username or not password or not email:
+        return Response({"error": "Usuario, correo y contraseña son obligatorios"}, status=400)
     try:
         validate_password(password)
         with transaction.atomic():
@@ -77,7 +131,7 @@ def bootstrap_administrator(request):
                 raise ValueError("La inicialización ya fue realizada")
             user = User.objects.create_superuser(
                 username=username,
-                email=str(request.data.get("email", "")).strip().lower(),
+                email=email,
                 password=password,
                 first_name=str(request.data.get("first_name", "")).strip(),
                 last_name=str(request.data.get("last_name", "")).strip(),
@@ -121,7 +175,7 @@ def users(request):
         queryset = User.objects.prefetch_related("groups").order_by("username")
         return Response({"users": [serialize_user(user) for user in queryset], "roles": ROLE_NAMES})
 
-    required = ("username", "password", "role")
+    required = ("username", "email", "password", "role")
     missing = [field for field in required if not str(request.data.get(field, "")).strip()]
     if missing:
         return Response({"error": f"Faltan campos obligatorios: {', '.join(missing)}"}, status=400)

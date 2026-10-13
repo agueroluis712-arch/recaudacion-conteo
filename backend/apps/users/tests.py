@@ -2,6 +2,8 @@ from django.contrib.auth import get_user_model
 from django.contrib.auth.models import Group
 from django.test import Client, TestCase, override_settings
 from django.urls import reverse
+from django.core import mail
+from urllib.parse import parse_qs, urlparse
 
 
 class AuthenticationAndRolesTests(TestCase):
@@ -18,6 +20,7 @@ class AuthenticationAndRolesTests(TestCase):
                 "password": "ClaveInicialSegura-2026",
                 "first_name": "Luis",
                 "last_name": "Administrador",
+                "email": "admin@example.com",
             },
             content_type="application/json",
             HTTP_X_CSRFTOKEN=token,
@@ -60,6 +63,7 @@ class AuthenticationAndRolesTests(TestCase):
                 "password": "OtraClaveSegura-2026",
                 "first_name": "Ana",
                 "last_name": "Pérez",
+                "email": "ana@example.com",
                 "role": "OPERADOR",
             },
             content_type="application/json",
@@ -78,3 +82,45 @@ class AuthenticationAndRolesTests(TestCase):
             self.client.patch(reverse("progression-settings"), {"interval_value": 3}, content_type="application/json").status_code,
             403,
         )
+
+    @override_settings(
+        EMAIL_BACKEND="django.core.mail.backends.locmem.EmailBackend",
+        APP_PUBLIC_URL="https://recaudacion.example",
+    )
+    def test_password_reset_sends_one_time_link_and_changes_password(self):
+        User = get_user_model()
+        user = User.objects.create_user(
+            "operador-correo",
+            email="operador@example.com",
+            password="ClaveAnteriorSegura-2026",
+        )
+        response = self.client.post(
+            reverse("auth-password-reset"),
+            {"email": "OPERADOR@example.com"},
+            content_type="application/json",
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(len(mail.outbox), 1)
+        reset_url = next(line for line in mail.outbox[0].body.splitlines() if line.startswith("https://"))
+        params = parse_qs(urlparse(reset_url).fragment.split("?", 1)[1])
+        payload = {
+            "uid": params["uid"][0],
+            "token": params["token"][0],
+            "password": "ClaveNuevaSegura-2026",
+        }
+        confirmed = self.client.post(reverse("auth-password-reset-confirm"), payload, content_type="application/json")
+        self.assertEqual(confirmed.status_code, 200)
+        user.refresh_from_db()
+        self.assertTrue(user.check_password("ClaveNuevaSegura-2026"))
+        reused = self.client.post(reverse("auth-password-reset-confirm"), payload, content_type="application/json")
+        self.assertEqual(reused.status_code, 400)
+
+    @override_settings(EMAIL_BACKEND="django.core.mail.backends.locmem.EmailBackend")
+    def test_password_reset_does_not_reveal_unknown_email(self):
+        response = self.client.post(
+            reverse("auth-password-reset"),
+            {"email": "nadie@example.com"},
+            content_type="application/json",
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(len(mail.outbox), 0)
